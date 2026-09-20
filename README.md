@@ -117,10 +117,12 @@ brandsuit-ai/
 ├── error_analysis_examples.py  # Holdout News leaks, before vs after
 ├── DECISIONS.md                # What I chose and what I rejected
 ├── data/raw/                   # JSON mapping committed; CSV is not
-└── models/                     # .gitkeep only — run export_model.py
+└── models/                     # committed joblib files Streamlit loads
 ```
 
-`app.py` never calls `.fit`. It loads the saved vectorizer and model, runs `transform` + `predict_proba`, then `evaluate_policy`.
+`app.py` never calls `.fit`. It loads the saved vectorizer and model from `models/`, runs `transform` + `predict_proba`, then `evaluate_policy`.
+
+The two `.joblib` files are in the repo so a public Streamlit Cloud app can start without the 60 MB training CSV. Rebuild them locally with `python src/export_model.py` if the mapping or hyperparameters change, then commit the new files.
 
 ---
 
@@ -132,8 +134,8 @@ Python 3.11+ (I used 3.13). From this folder:
 pip install -r requirements.txt
 ```
 
-1. Download `USvideos.csv` from [Kaggle: YouTube Trending](https://www.kaggle.com/datasets/datasnaek/youtube-new) and put it in `data/raw/` next to `US_category_id.json`.
-2. Train and save the artifacts:
+1. Download `USvideos.csv` from [Kaggle: YouTube Trending](https://www.kaggle.com/datasets/datasnaek/youtube-new) and put it in `data/raw/` next to `US_category_id.json` (only needed to retrain).
+2. The committed files `models/category_tfidf.joblib` and `models/category_logreg.joblib` are enough to open the app. To rebuild them after a mapping change:
 
 ```bash
 python src/export_model.py

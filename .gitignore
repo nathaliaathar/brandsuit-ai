@@ -1,9 +1,23 @@
-# Dataset (too large for GitHub; download from Kaggle — see README)
+# Training CSV is too large for GitHub. Fitted joblib files ARE committed
+# so Streamlit Cloud can load them without calling .fit.
 data/raw/*.csv
 
-# Trained models (rebuild with: python src/export_model.py)
-models/*.joblib
-models/*.pkl
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# Local study notes — not part of the public repo
+LEARNING_LOG.md
+project_instructions.md
+
+# Notebook / Streamlit junk
+.ipynb_checkpoints/
+.streamlit/
+_st.log
+_st.err
 
 # Local study notes — not part of the public repo
 LEARNING_LOG.md
