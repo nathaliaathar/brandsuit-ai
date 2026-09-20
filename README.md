@@ -149,7 +149,7 @@ Try the default Infowars example under **Kids & Family Brand** (should be NO), t
 
 ---
 
-## What I would not say in an interview
+## What I would not confirm:
 
 - That this detects hate, violence, or brand safety. It does not.
 - That 0.55 is proven on a fresh test set. It is not.
