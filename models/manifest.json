@@ -1,0 +1,23 @@
+{
+  "spec_key": "unigram_balanced",
+  "label": "Unigram logistic regression, balanced weights",
+  "ngram_range": [
+    1,
+    1
+  ],
+  "class_weight": "balanced",
+  "max_features": 5000,
+  "min_df": 2,
+  "mapping_sha256_16": "33c26b5c97f34a6d",
+  "classes": [
+    "Education, Science & Technology",
+    "Entertainment & Culture",
+    "Gaming",
+    "Lifestyle & Interests",
+    "News, Politics & Society",
+    "Sports"
+  ],
+  "saved_at_utc": "2026-09-20T12:18:12.422863+00:00",
+  "vectorizer_path": "category_tfidf.joblib",
+  "model_path": "category_logreg.joblib"
+}

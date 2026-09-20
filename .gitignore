@@ -8,27 +8,11 @@ __pycache__/
 .venv/
 venv/
 .env
+.pytest_cache/
 
 # Local study notes — not part of the public repo
 LEARNING_LOG.md
 project_instructions.md
-
-# Notebook / Streamlit junk
-.ipynb_checkpoints/
-.streamlit/
-_st.log
-_st.err
-
-# Local study notes — not part of the public repo
-LEARNING_LOG.md
-project_instructions.md
-
-# Python
-__pycache__/
-*.pyc
-.venv/
-venv/
-.env
 
 # Notebook / Streamlit junk
 .ipynb_checkpoints/

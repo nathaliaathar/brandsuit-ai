@@ -3,27 +3,58 @@
 # comes from src/policies/brand_policies.py.
 
 import html
+import json
 from pathlib import Path
 
 import joblib
-import pandas as pd
 import streamlit as st
 
+from src.decision import (
+    STATUS_INSUFFICIENT,
+    STATUS_OK,
+    allowed_category_score,
+    assess_input,
+    combine_text,
+    view_state,
+)
 from src.policies.brand_policies import (
     BRAND_POLICIES,
     VALIDATED_SOURCE,
-    evaluate_policy,
 )
+from src.story import render_story
 
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = ROOT / "models"
+LIVE_URL = "https://brandsuit.streamlit.app/"
 REPO_URL = "https://github.com/nathaliaathar/brandsuit-ai"
 
-EXAMPLE_TITLE = "Milo Takes Calls From Infowars Listeners"
-EXAMPLE_DESCRIPTION = (
-    "Political talk-show host takes live calls and discusses current events "
-    "with Infowars listeners."
-)
+# Illustrative only. Users can edit after loading. Default is a short sports title
+# so the first decision is easy to read; the talk-show error case stays in Story.
+EXAMPLES = [
+    {
+        "label": "Sports",
+        "title": "NBA Finals Game 7 highlights",
+        "description": "Watch the best plays from the championship game.",
+    },
+    {
+        "label": "Gaming",
+        "title": "Fortnite Chapter 5 Season launch trailer",
+        "description": "New map, weapons, and battle pass in this gameplay trailer.",
+    },
+    {
+        "label": "News",
+        "title": "Senate votes on budget bill after overnight debate",
+        "description": "Live coverage of the legislative session and political reaction.",
+    },
+    {
+        "label": "Ambiguous talk-show",
+        "title": "Milo Takes Calls From Infowars Listeners",
+        "description": (
+            "Political talk-show host takes live calls and discusses current events "
+            "with Infowars listeners."
+        ),
+    },
+]
 
 st.set_page_config(
     page_title="BrandSuit AI",
@@ -36,6 +67,14 @@ st.set_page_config(
 def esc(value):
     """Everything injected into markdown HTML goes through this."""
     return html.escape(str(value))
+
+
+@st.cache_data
+def load_evaluation():
+    path = ROOT / "reports" / "evaluation.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 @st.cache_resource
@@ -60,11 +99,10 @@ def predict_probabilities(vec, model, text):
 
 @st.cache_data
 def top_words_by_category(_vec, _model, top_n=6):
-    """Words with the largest positive logistic coefficient per class.
+    """Largest positive logistic coefficients per class from the fitted model.
 
-    Same idea as petal_width for iris: these are the features the model
-    leans on when it picks a category. Coefficients come from the fitted
-    LogReg; feature names come from the fitted TF-IDF vocabulary.
+    Feature names come from the train-only TF-IDF vocabulary. These are
+    associations in text, not proof that a video is safe to place.
     """
     feature_names = _vec.get_feature_names_out()
     result = {}
@@ -76,16 +114,6 @@ def top_words_by_category(_vec, _model, top_n=6):
         ]
     return result
 
-
-# Soft palette per class — informational blues/greens, never decorative red.
-CATEGORY_COLORS = {
-    "Entertainment & Culture": "#0369a1",
-    "Lifestyle & Interests": "#0e7490",
-    "Education, Science & Technology": "#15803d",
-    "News, Politics & Society": "#1d4ed8",
-    "Sports": "#0f766e",
-    "Gaming": "#4338ca",
-}
 
 st.markdown(
     """
@@ -529,6 +557,31 @@ st.markdown(
         color: #7f1d1d;
         line-height: 1.55;
     }
+    .decision-banner-abstain {background: #334155; border: 1px solid #1e293b;}
+    .decision-banner-abstain h3 {color: #e2e8f0;}
+    .decision-banner-stale {background: #78350f; border: 1px solid #92400e;}
+    .decision-banner-stale h3 {color: #fde68a;}
+    .scored-text {
+        font-size: 0.8rem;
+        color: #475569;
+        margin: 0.35rem 0 0.7rem;
+        line-height: 1.4;
+    }
+
+    @media (max-width: 900px) {
+        .block-container {padding: 1rem 1rem 2rem;}
+        .funnel {grid-template-columns: 1fr;}
+        .funnel-arrow {display: none;}
+        .pipeline-grid {grid-template-columns: 1fr 1fr;}
+        .profile-grid {grid-template-columns: 1fr;}
+        .word-grid {grid-template-columns: 1fr;}
+        .change-grid {grid-template-columns: 1fr;}
+        .metric-journey {flex-wrap: wrap;}
+        .dist-row {flex-wrap: wrap;}
+        .dist-row .nm {flex: 1 1 100%;}
+        .dist-row .pc {flex: 1 1 auto;}
+        .main-header {padding: 1rem 1.1rem;}
+    }
 
     </style>
     """,
@@ -541,7 +594,11 @@ st.markdown(
         <div>
             <div class="header-title">BrandSuit AI</div>
             <div class="header-subtitle">Contextual suitability for YouTube advertising</div>
-            <div class="header-links"><a href="{REPO_URL}" target="_blank">View repository ↗</a></div>
+            <div class="header-links">
+                <a href="{LIVE_URL}" target="_blank">Live demo ↗</a>
+                &nbsp;·&nbsp;
+                <a href="{REPO_URL}" target="_blank">View repository ↗</a>
+            </div>
         </div>
         <div class="badge-pill">Suitability, not safety detection</div>
     </div>
@@ -550,17 +607,29 @@ st.markdown(
 )
 
 vec, model = load_artifacts()
+evaluation = load_evaluation()
+selected_short = "Balanced LogReg"
+if evaluation and evaluation.get("status") == "completed":
+    selected_short = {
+        "unigram_balanced": "Unigram balanced LR",
+        "bigram_balanced": "Bigram balanced LR",
+        "unigram_unweighted": "Unigram LR",
+    }.get(evaluation["selected_model"]["key"], evaluation["selected_model"]["label"])
 if vec is None or model is None:
     st.error(
         "The trained classifier is not available. From this folder run "
-        "`py src/export_model.py` to rebuild models/category_tfidf.joblib "
-        "and models/category_logreg.joblib."
+        "`py -m src.evaluate` (or `py -m src.export_model` after evaluation) "
+        "to rebuild models/category_tfidf.joblib and models/category_logreg.joblib."
     )
     st.stop()
 
 tab_live, tab_story = st.tabs(
-    ["Live Decision", "Project Story & Architecture"]
+    ["Live Decision", "Project Story"]
 )
+
+if "video_title" not in st.session_state:
+    st.session_state.video_title = EXAMPLES[0]["title"]
+    st.session_state.video_desc = EXAMPLES[0]["description"]
 
 # ==========================================
 # TAB 1 — LIVE DECISION
@@ -568,126 +637,140 @@ tab_live, tab_story = st.tabs(
 with tab_live:
     st.subheader("Should this brand advertise next to this video?")
     st.caption(
-        "Text-only category prediction, then a brand-specific allow-list policy. "
-        "The model scores stay the same; switching the advertiser profile can flip YES to NO."
+        "Contextual suitability from title and description — not a safety or "
+        "child-appropriateness detector. Switch the advertiser to reuse the last "
+        "analyzed category scores and apply a different allow-list."
     )
 
     col_input, col_result = st.columns([1, 1.2], gap="large")
 
     with col_input:
-        st.markdown("### 1. Video text and advertiser policy")
+        st.markdown("**Illustrative examples**")
+        st.caption("Not live inventory. Load one, edit if you want, then analyze.")
+        example_cols = st.columns(len(EXAMPLES))
+        for column, example in zip(example_cols, EXAMPLES):
+            if column.button(example["label"], use_container_width=True):
+                st.session_state.video_title = example["title"]
+                st.session_state.video_desc = example["description"]
+                st.rerun()
 
         video_title = st.text_input(
             "Video title",
-            value=EXAMPLE_TITLE,
+            key="video_title",
             placeholder="Paste the YouTube video title...",
         )
         video_desc = st.text_area(
             "Video description",
-            value=EXAMPLE_DESCRIPTION,
+            key="video_desc",
             height=110,
             placeholder="Paste the video description...",
         )
         advertiser = st.selectbox(
-            "Advertiser profile — this chooses the policy",
+            "Advertiser profile",
             list(BRAND_POLICIES),
             index=0,
             help=(
-                "The classifier does not decide YES or NO. Each advertiser profile "
-                "has its own allowed categories and confidence threshold."
+                "The classifier does not decide YES or NO. Each profile has its "
+                "own allowed categories and threshold."
             ),
         )
 
         policy = BRAND_POLICIES[advertiser]
         allowed_cats = policy["allowed_categories"]
-
-        st.markdown(
-            f"**Allowed for {esc(advertiser)}** "
-            f"(this profile's allow-list, not the model's):"
-        )
         st.markdown(
             "".join(f'<span class="cat-tag">{esc(cat)}</span>' for cat in allowed_cats),
             unsafe_allow_html=True,
         )
-
-        # Only one threshold came from an experiment; the rest are starting points.
         is_validated = policy["threshold_source"] == VALIDATED_SOURCE
         source_class = "source-validated" if is_validated else "source-illustrative"
         st.markdown(
             f'<div class="policy-line">'
-            f'Policy for <b>{esc(advertiser)}</b>: '
-            f'<b>{esc(policy["risk_profile"])}</b> · '
-            f'threshold <b>{policy["threshold"]:.2f}</b> · '
+            f'{esc(policy["risk_profile"])} · threshold {policy["threshold"]:.2f} · '
             f'<span class="{source_class}">{esc(policy["threshold_source"])}</span>'
             f"</div>",
             unsafe_allow_html=True,
-        )
-        st.caption(
-            "Change the advertiser profile to load a different allow-list and threshold. "
-            "The video text is not re-scored until you click Analyze placement."
         )
 
         analyze_btn = st.button(
             "Analyze placement", type="primary", use_container_width=True
         )
 
-    # Training text was title + " " + description, then stripped.
-    text = f"{video_title} {video_desc}".strip()
+    text = combine_text(video_title, video_desc)
 
-    # Predict only on click (or first load). Switching advertiser re-uses the
-    # stored probabilities, so the policy updates without a new inference.
-    if analyze_btn or "probabilities" not in st.session_state:
-        if not text:
-            st.session_state.pop("probabilities", None)
-            st.session_state["input_error"] = (
-                "Enter a title or a description before analyzing the placement."
-            )
-        else:
+    if not text:
+        st.session_state.pop("probabilities", None)
+        st.session_state.pop("analysis_status", None)
+        st.session_state["scored_text"] = ""
+        st.session_state.pop("assessment_message", None)
+
+    if analyze_btn:
+        assessment = assess_input(vec, video_title, video_desc)
+        st.session_state["analysis_status"] = assessment["status"]
+        st.session_state["scored_text"] = assessment["text"]
+        st.session_state["assessment_message"] = assessment["message"]
+        st.session_state.pop("input_error", None)
+        if assessment["status"] == STATUS_OK:
             try:
-                st.session_state["probabilities"] = predict_probabilities(vec, model, text)
-                st.session_state["scored_text"] = text
-                st.session_state.pop("input_error", None)
+                st.session_state["probabilities"] = predict_probabilities(
+                    vec, model, assessment["text"]
+                )
             except Exception:
                 st.session_state.pop("probabilities", None)
-                st.session_state["input_error"] = (
+                st.session_state["analysis_status"] = STATUS_INSUFFICIENT
+                st.session_state["assessment_message"] = (
                     "This text could not be scored. Try a different title or description."
                 )
+        else:
+            st.session_state.pop("probabilities", None)
 
+    pane = view_state(
+        text,
+        st.session_state.get("scored_text"),
+        st.session_state.get("analysis_status"),
+    )
     probabilities = st.session_state.get("probabilities")
-    input_error = st.session_state.get("input_error")
+    scored_text = st.session_state.get("scored_text") or ""
 
     with col_result:
-        st.markdown("### 2. Placement decision")
+        st.markdown("### Placement decision")
 
-        st.markdown(
-            f"""
-            <div class="pipeline-grid">
-                <div class="pipeline-cell">
-                    <div class="label">1. Input</div>
-                    <div class="val">Title + description</div>
+        if pane == "empty":
+            st.info("Enter a title or a description, then click **Analyze placement**.")
+        elif pane == "idle":
+            st.info("Click **Analyze placement** to score this text for the selected profile.")
+        elif pane == "stale":
+            st.markdown(
+                f"""
+                <div class="decision-banner decision-banner-stale">
+                    <div class="status-row">
+                        <h3>Result is out of date</h3>
+                    </div>
+                    <p>The title or description changed. Click <b>Analyze placement</b>
+                    to score the new text. Previous YES/NO is hidden so it cannot be
+                    mistaken for the current input.</p>
                 </div>
-                <div class="pipeline-cell">
-                    <div class="label">2. Features</div>
-                    <div class="val">TF-IDF n-grams</div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if scored_text:
+                st.markdown(
+                    f'<div class="scored-text">Last analyzed text: {esc(scored_text[:180])}</div>',
+                    unsafe_allow_html=True,
+                )
+        elif pane == STATUS_INSUFFICIENT:
+            st.markdown(
+                f"""
+                <div class="decision-banner decision-banner-abstain">
+                    <div class="status-row">
+                        <h3>Insufficient information</h3>
+                    </div>
+                    <p>{esc(st.session_state.get("assessment_message") or "")}</p>
                 </div>
-                <div class="pipeline-cell">
-                    <div class="label">3. Model</div>
-                    <div class="val">Balanced LogReg</div>
-                </div>
-                <div class="pipeline-cell">
-                    <div class="label">4. Profile</div>
-                    <div class="val">{esc(advertiser)} · {policy['threshold']:.2f}</div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        if input_error:
-            st.error(input_error)
-
-        if probabilities:
-            p_allow, is_suitable = evaluate_policy(probabilities, policy)
+                """,
+                unsafe_allow_html=True,
+            )
+        elif pane == "current" and probabilities:
+            score, is_suitable = allowed_category_score(probabilities, policy)
             ranked = sorted(probabilities.items(), key=lambda item: item[1], reverse=True)
             predicted = ranked[0][0]
             threshold = policy["threshold"]
@@ -696,16 +779,15 @@ with tab_live:
             if is_suitable:
                 banner, word = "decision-banner-yes", "YES · Suitable for this profile"
                 symbol, explanation = "&ge;", (
-                    f"The combined probability of categories allowed by "
-                    f"<b>{esc(advertiser)}</b> clears this profile's threshold. "
-                    "The placement is approved."
+                    f"The allowed-category score for <b>{esc(advertiser)}</b> "
+                    "clears this profile's threshold. That is a contextual match "
+                    "to the allow-list, not a safety clearance."
                 )
             else:
                 banner, word = "decision-banner-no", "NO · Not suitable for this profile"
                 symbol, explanation = "&lt;", (
-                    f"The combined probability of categories allowed by "
-                    f"<b>{esc(advertiser)}</b> is below this profile's threshold. "
-                    "The placement is withheld."
+                    f"The allowed-category score for <b>{esc(advertiser)}</b> "
+                    "is below this profile's threshold. The placement is withheld."
                 )
 
             st.markdown(
@@ -714,532 +796,59 @@ with tab_live:
                     <div class="status-row">
                         <h3>{word}</h3>
                         <span class="compare">
-                            p_allow: {p_allow * 100:.1f}% {symbol} threshold: {threshold * 100:.1f}%
+                            Allowed-category score: {score * 100:.1f}% {symbol}
+                            threshold: {threshold * 100:.1f}%
                         </span>
                     </div>
                     <p><b>Predicted category:</b> {esc(predicted)}
-                       &nbsp;&bull;&nbsp; <b>Advertiser profile:</b> {esc(advertiser)}<br>
+                       &nbsp;&bull;&nbsp; <b>Profile:</b> {esc(advertiser)}<br>
                        {explanation}</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
-
-            if st.session_state.get("scored_text") != text:
-                st.info("The text changed. Click **Analyze placement** to score it again.")
-
-            st.markdown("**Category probabilities (model output — same for every profile)**")
-            for category, score in ranked:
+            st.markdown(
+                f'<div class="scored-text">Analyzed text: {esc(scored_text[:180])}</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown("**Category scores (same for every profile)**")
+            for category, cat_score in ranked:
                 style = "prob-name" if category in allowed_set else "prob-name-muted"
                 col_label, col_bar, col_val = st.columns([2.5, 5, 1])
                 col_label.markdown(
                     f'<div class="{style}">{esc(category)}</div>', unsafe_allow_html=True
                 )
-                col_bar.progress(min(score, 1.0))
+                col_bar.progress(min(cat_score, 1.0))
                 col_val.markdown(
-                    f'<div class="prob-value">{score * 100:.1f}%</div>',
+                    f'<div class="prob-value">{cat_score * 100:.1f}%</div>',
                     unsafe_allow_html=True,
                 )
 
+        with st.expander("How the allowed-category score is computed"):
+            st.markdown(
+                f"""
+The classifier turns title + description into TF-IDF features and returns six
+category scores that sum to 1. **Allowed-category score** is the sum of those
+outputs for the categories this profile allows
+({", ".join(policy["allowed_categories"])}).
+
+It is **not** a verified probability that the video is safe, appropriate for
+children, or a good real-world placement. Thresholds other than the Kids &
+Family development-holdout candidate are illustrative. Model: {selected_short}.
+                """
+            )
+
         st.markdown(
-            "<div class='insight-card'><b>Model output &ne; business decision:</b> "
-            "the classifier predicts context once. YES / NO comes from the selected "
-            f"advertiser profile (<b>{esc(advertiser)}</b>): its allow-list and its "
-            "threshold. Switch the profile to evaluate a different risk tolerance on "
-            "the same probabilities.</div>",
+            "<div class='insight-card'><b>Model output is not the business decision.</b> "
+            "YES / NO comes from the selected advertiser profile "
+            f"(<b>{esc(advertiser)}</b>): its allow-list and its threshold. "
+            "Switching the profile reuses the last analyzed scores.</div>",
             unsafe_allow_html=True,
         )
 
+
 # ==========================================
-# TAB 2 — PROJECT STORY (data storytelling)
+# TAB 2 — PROJECT STORY
 # ==========================================
-
-# Measured on the development holdout (see DECISIONS.md D3/D4), recomputed
-# after Pets & Animals was remapped to Education, Science & Technology.
-CLASS_DISTRIBUTION = [
-    ("Entertainment & Culture", 3287, 658),
-    ("Lifestyle & Interests", 1223, 245),
-    ("Education, Science & Technology", 768, 154),
-    ("News, Politics & Society", 519, 104),
-    ("Sports", 451, 90),
-    ("Gaming", 103, 20),
-]
-TOTAL_VIDEOS = 6351
-
-EXPERIMENT_JOURNEY = [
-    ("Majority baseline", "Always guesses Entertainment", 0.518, 0.114, 0.00, None),
-    ("Unigram, no weights", "First real model", 0.780, 0.678, 0.75, 6),
-    ("Unigram, balanced", "class_weight=balanced", 0.800, 0.782, 0.90, 0),
-    ("Bigram, balanced", "Deployed + policy 0.55", 0.788, 0.759, 0.88, 0),
-]
-
-# The six real News videos that the first model approved for a Kids & Family ad,
-# with p_allow before (unigram, no weights) and after (deployed model).
-# Produced by error_analysis_examples.py on the development holdout.
-LEAKED_NEWS_CASES = [
-    ("Veteran Congressman John Conyers Announces He Is Retiring | The View", 0.67, 0.39),
-    ("Rose McGowan Shares Her Thoughts On 'Time's Up' Movement | The View", 0.67, 0.43),
-    ("Search continues for missing Argentine submarine with 44 crew members", 0.63, 0.40),
-    ("Additional Remains Of Miami Gardens Soldier Recovered", 0.56, 0.34),
-    ("Pepsi Uses Aborted Babies to Flavor Test Soda - Alex Jones", 0.56, 0.31),
-    ("Jerry Van Dyke, star of 'Coach', dead at 86", 0.55, 0.32),
-]
-
-
-def step_header(number, title, subtitle):
-    st.markdown(
-        f'<div class="story-step"><span class="num">{number}</span>'
-        f'<span class="txt">{title}</span>'
-        f'<span class="sub">{subtitle}</span></div>',
-        unsafe_allow_html=True,
-    )
-
-
 with tab_story:
-    st.subheader("How this dataset became an advertising decision")
-    st.caption(
-        "Follow the data: 40,949 raw rows → one model → a business rule. "
-        "Every number below was measured on the development holdout."
-    )
-
-    # ---------- 1. From raw rows to labelled videos ----------
-    step_header(1, "From raw rows to labelled videos", "one row per video, not per trending day")
-    st.markdown(
-        """
-        <div class="funnel">
-          <div class="funnel-box">
-            <div class="n">40,949</div><div class="l">raw CSV rows</div>
-            <div class="w">a video repeats on every trending day</div>
-          </div>
-          <div class="funnel-arrow">→</div>
-          <div class="funnel-box">
-            <div class="n">6,351</div><div class="l">unique video_id</div>
-            <div class="w">deduplicated before any split</div>
-          </div>
-          <div class="funnel-arrow">→</div>
-          <div class="funnel-box">
-            <div class="n">16</div><div class="l">YouTube categories</div>
-            <div class="w">joined from US_category_id.json</div>
-          </div>
-          <div class="funnel-arrow">→</div>
-          <div class="funnel-box">
-            <div class="n">6</div><div class="l">suitability classes</div>
-            <div class="w">bucketed for advertiser policies</div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.caption(
-        "Deduplicating first matters: the same video trending 8 days would otherwise leak "
-        "between train and test and inflate every score."
-    )
-
-    # ---------- 2. Class distribution ----------
-    step_header(2, "The classes are heavily imbalanced", "share of the 6,351 unique videos")
-    rows = ""
-    for name, total, _ in CLASS_DISTRIBUTION:
-        share = total / TOTAL_VIDEOS * 100
-        colour = "#0369a1" if share >= 50 else ("#b91c1c" if share < 2 else "#38bdf8")
-        rows += (
-            f'<div class="dist-row"><div class="nm">{esc(name)}</div>'
-            f'<div class="tr"><div class="fl" style="width:{share:.1f}%;background:{colour};">'
-            f'<span class="bar-top-label">{share:.1f}%</span></div></div>'
-            f'<div class="pc">{total:,} videos</div></div>'
-        )
-    st.markdown(rows, unsafe_allow_html=True)
-    st.markdown(
-        '<div class="caveat">One class owns half the dataset and Gaming has only '
-        "103 videos (1.6%). Any metric that averages over <i>videos</i> instead of "
-        "<i>classes</i> will be dominated by Entertainment.</div>",
-        unsafe_allow_html=True,
-    )
-
-    # ---------- 3. Baseline ----------
-    step_header(3, "The dumb baseline sets the bar", "always answer with the most common class")
-    base_a, base_b, base_c = st.columns(3)
-    base_a.markdown(
-        '<div class="metric-card"><h4>Baseline accuracy</h4>'
-        '<div class="value">51.8%</div>'
-        '<div class="caption">always Entertainment &amp; Culture</div></div>',
-        unsafe_allow_html=True,
-    )
-    base_b.markdown(
-        '<div class="metric-card"><h4>Baseline macro-F1</h4>'
-        '<div class="value" style="color:#b91c1c;">0.114</div>'
-        '<div class="caption">five of six classes score zero</div></div>',
-        unsafe_allow_html=True,
-    )
-    base_c.markdown(
-        '<div class="metric-card"><h4>Baseline News recall</h4>'
-        '<div class="value" style="color:#b91c1c;">0.0%</div>'
-        '<div class="caption">it never flags politics</div></div>',
-        unsafe_allow_html=True,
-    )
-    st.caption(
-        "This is why accuracy alone is a trap: a model that understands nothing "
-        "already scores 51.8%. Macro-F1 exposes it instantly."
-    )
-
-    # ---------- 4. Split ----------
-    step_header(4, "Split before touching the vocabulary", "80 / 20 stratified, random_state=42")
-    st.markdown(
-        """
-        <div class="funnel">
-          <div class="funnel-box">
-            <div class="n">5,080</div><div class="l">training videos</div>
-            <div class="w">TF-IDF is fitted here only</div>
-          </div>
-          <div class="funnel-arrow">→</div>
-          <div class="funnel-box">
-            <div class="n">1,271</div><div class="l">holdout videos</div>
-            <div class="w">transform only, never fit</div>
-          </div>
-          <div class="funnel-arrow">→</div>
-          <div class="funnel-box">
-            <div class="n">5,000</div><div class="l">TF-IDF features</div>
-            <div class="w">most frequent uni + bigrams</div>
-          </div>
-          <div class="funnel-arrow">→</div>
-          <div class="funnel-box">
-            <div class="n">6</div><div class="l">predicted classes</div>
-            <div class="w">probabilities summing to 1</div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # ---------- 5. Words the model learned (iris petal analogy) ----------
-    step_header(
-        5,
-        "What the model studied — the words that separate the classes",
-        "like petal_width for iris flowers, these n-grams pull a video toward a category",
-    )
-    st.markdown(
-        "In the iris notebook, `petal_length` and `petal_width` separate the flower "
-        "species better than sepal measures. Here the features are **words and word "
-        "pairs** from title + description. After training, each logistic coefficient "
-        "says: *if this word shows up, lean toward this category*."
-    )
-    st.markdown(
-        '<div class="policy-depends"><b>How to read the chart.</b> Each panel is one '
-        "category. The bars are the six words with the <b>largest positive "
-        "coefficients</b> for that class in the deployed model "
-        "(TF-IDF + balanced LogReg). Longer bar = stronger pull. "
-        "This is the text version of a pairplot: you can see which signals the "
-        "model trusts.</div>",
-        unsafe_allow_html=True,
-    )
-
-    top_words = top_words_by_category(vec, model, top_n=6)
-    global_max = max(w for pairs in top_words.values() for _, w in pairs) or 1.0
-    panels = ""
-    for class_name, pairs in top_words.items():
-        colour = CATEGORY_COLORS.get(class_name, "#0369a1")
-        rows_html = ""
-        for word, weight in pairs:
-            width_pct = max(weight / global_max * 100, 2.0)
-            rows_html += (
-                f'<div class="word-row"><div class="w" title="{esc(word)}">{esc(word)}</div>'
-                f'<div class="track"><div class="fill" style="width:{width_pct:.1f}%;'
-                f'background:{colour};"></div></div>'
-                f'<div class="wt">{weight:.2f}</div></div>'
-            )
-        panels += (
-            f'<div class="word-panel"><h4 style="border-color:{colour};">{esc(class_name)}</h4>'
-            f"{rows_html}</div>"
-        )
-    st.markdown(f'<div class="word-grid">{panels}</div>', unsafe_allow_html=True)
-    st.caption(
-        "Weights are logistic regression coefficients on TF-IDF features "
-        "(fit on the 5,080 training videos only). Same scale across panels."
-    )
-    st.markdown(
-        '<div class="takeaway"><b>What a 5-year-old version sounds like:</b> '
-        "the model keeps a cheat sheet. If it sees <i>nba</i> or <i>nfl</i>, it thinks "
-        "Sports. If it sees <i>nintendo</i> or <i>fortnite</i>, it thinks Gaming. "
-        "If it sees <i>trump</i> or <i>washingtonpost</i>, it thinks News. "
-        "Entertainment leans on <i>music</i>, <i>movie</i>, <i>netflix</i>.</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<div class="caveat"><b>Also an honest quirk:</b> Education, Science &amp; '
-        "Technology lists <i>cat</i>, <i>dog</i>, <i>animals</i> near the top because "
-        "Pets &amp; Animals videos were remapped into that bucket. The model is not "
-        "wrong about the words — the label grouping pulled pet vocabulary into "
-        "Education. That is the kind of thing an interviewer should ask about.</div>",
-        unsafe_allow_html=True,
-    )
-
-    # ---------- 6. The failure we found ----------
-    step_header(
-        6,
-        "Then we read the mistakes, one by one",
-        "the first model confused politics with entertainment",
-    )
-    st.markdown(
-        "The first trained model looked fine on paper: 78.0% accuracy. "
-        "So we listed every video it got wrong. A pattern jumped out. "
-        "**Of the 104 real News videos in the holdout, 24 were labelled "
-        "Entertainment & Culture** — a retiring congressman, a submarine search, "
-        "a soldier's remains being recovered."
-    )
-    st.markdown(
-        '<div class="caveat"><b>Why that is a product bug, not just a metric.</b> '
-        "Kids & Family Brand allows Sports and Entertainment. When a news video is "
-        "scored as entertainment, its <code>p_allow</code> climbs above 0.55 and the "
-        "policy says YES. Six real videos passed that gate — a cereal ad would have "
-        "run next to them.</div>",
-        unsafe_allow_html=True,
-    )
-
-    before_rows = "".join(
-        f"<tr><td>{esc(title)}</td>"
-        f'<td class="num">{p_before:.2f}</td>'
-        f'<td><span class="pill pill-bad">APPROVED for kids ad</span></td></tr>'
-        for title, p_before, _ in LEAKED_NEWS_CASES
-    )
-    st.markdown(
-        "<table class='case-table'><thead><tr>"
-        "<th>Real News video in the holdout</th>"
-        "<th style='text-align:center;'>p_allow (first model)</th>"
-        "<th>Kids &amp; Family decision at 0.55</th>"
-        f"</tr></thead><tbody>{before_rows}</tbody></table>",
-        unsafe_allow_html=True,
-    )
-
-    # ---------- 7. What we changed ----------
-    step_header(7, "So we changed three things", "each fix answers one thing we saw in the errors")
-    st.markdown(
-        """
-        <div class="change-grid">
-          <div class="change-card">
-            <div class="kicker">Fix 1 · Class weights</div>
-            <h4>class_weight="balanced"</h4>
-            <p>Entertainment is 51.8% of the data, so guessing it was almost always
-               a safe bet. Weighting makes one mistake on a rare class cost as much
-               as many mistakes on the common one.</p>
-            <div class="plain">Like a teacher who stops giving credit for the
-               answer everybody already knows.</div>
-          </div>
-          <div class="change-card">
-            <div class="kicker">Fix 2 · Bigrams</div>
-            <h4>ngram_range=(1, 2)</h4>
-            <p>Talk-show wording fooled the model: single words like <i>calls</i>,
-               <i>show</i> and <i>host</i> look like entertainment. Word pairs let it
-               read <i>white house</i> or <i>press conference</i> as one signal.</p>
-            <div class="plain">"Hot" and "dog" mean something different from
-               "hot dog".</div>
-          </div>
-          <div class="change-card">
-            <div class="kicker">Fix 3 · Confidence policy</div>
-            <h4>p_allow ≥ threshold</h4>
-            <p>The old rule trusted the single top guess. The new rule adds up the
-               probability of the categories a brand allows and requires that sum to
-               clear the brand's threshold.</p>
-            <div class="plain">Not "what do you think?" but "how sure are you?"</div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # ---------- 8. Metric journey ----------
-    step_header(8, "What those fixes did to the metrics", "measured on the same 1,271 videos")
-    journey = ""
-    for name, note, _acc, macro, news_recall, approved in EXPERIMENT_JOURNEY:
-        approved_txt = "—" if approved is None else f"Kids & Family profile: {approved} News approved"
-        journey += (
-            '<div class="journey-col"><div class="journey-bars">'
-            f'<div class="journey-bar"><div class="bar-fill" style="height:{max(macro * 100, 1.5):.1f}%;'
-            f'background:#0369a1;"><span class="bar-top-label">{macro * 100:.1f}%</span></div></div>'
-            f'<div class="journey-bar"><div class="bar-fill" style="height:{max(news_recall * 100, 1.5):.1f}%;'
-            f'background:#15803d;"><span class="bar-top-label">{news_recall * 100:.1f}%</span></div></div>'
-            "</div>"
-            f'<div class="journey-label"><b>{esc(name)}</b><br>{esc(note)}<br>{approved_txt}</div></div>'
-        )
-    st.markdown(f'<div class="metric-journey">{journey}</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="legend-row">'
-        '<span><b style="background:#0369a1;"></b>Macro-F1 — average F1 of all 6 classes (shown as %)</span>'
-        '<span><b style="background:#15803d;"></b>News recall — share of real News videos the model catches</span>'
-        "</div>",
-        unsafe_allow_html=True,
-    )
-    st.caption(
-        "The green bars are a model metric, not a brand policy. "
-        "Kids & Family Brand is only one of four advertiser profiles (step 10); "
-        "News recall matters to it because that is the class it blocks."
-    )
-    st.markdown(
-        '<div class="takeaway">Accuracy barely moved (78.0% → 80.0%), and that is the '
-        "interesting part. Macro-F1 jumped from 67.8% to 78.2% and News recall from 75.0% "
-        "to 90.0%, so the gain came entirely from the rare classes the first model was "
-        "ignoring. Gaming recall moved the most: 20.0% → 90.0%. An accuracy-only report "
-        "would have shown almost nothing and we would have shipped the broken model.</div>",
-        unsafe_allow_html=True,
-    )
-
-    # ---------- 9. Back to the same six videos ----------
-    step_header(
-        9,
-        "Back to those six videos",
-        "same holdout, same threshold 0.55, after the three fixes",
-    )
-    after_rows = "".join(
-        f"<tr><td>{esc(title)}</td>"
-        f'<td class="num">{p_before:.2f}</td>'
-        f'<td class="num">{p_after:.2f}</td>'
-        f'<td><span class="pill pill-good">Withheld</span></td></tr>'
-        for title, p_before, p_after in LEAKED_NEWS_CASES
-    )
-    st.markdown(
-        "<table class='case-table'><thead><tr>"
-        "<th>Real News video in the holdout</th>"
-        "<th style='text-align:center;'>p_allow before</th>"
-        "<th style='text-align:center;'>p_allow after</th>"
-        "<th>Kids &amp; Family decision at 0.55</th>"
-        f"</tr></thead><tbody>{after_rows}</tbody></table>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<div class="takeaway"><b>All six now fall below the line.</b> The model also '
-        "recovers more of the class overall: News caught at argmax went from 78 to 92 "
-        "of 104 videos, and blocked-category approvals for Kids & Family went from 6 "
-        "to 0. Note what actually moved the needle — the model became less certain that "
-        "politics is entertainment, and the policy turned that lower confidence into a "
-        "NO.</div>",
-        unsafe_allow_html=True,
-    )
-
-    # ---------- 10. Policy layer ----------
-    step_header(
-        10,
-        "The model score is not the decision",
-        "each advertiser profile has its own allow-list and threshold",
-    )
-    st.markdown(
-        '<div class="policy-depends"><b>Policy depends on the advertiser profile.</b> '
-        "The classifier always returns the same six probabilities. YES / NO is computed "
-        "afterwards: <code>p_allow = sum of P(allowed categories for that profile)</code>, "
-        "then compared with that profile's threshold. Switching the profile can approve "
-        "a video that another profile withholds.</div>",
-        unsafe_allow_html=True,
-    )
-
-    profile_cards = ""
-    for name, spec in BRAND_POLICIES.items():
-        cats = " · ".join(spec["allowed_categories"])
-        source = spec["threshold_source"]
-        active = " active" if spec["threshold_source"] == VALIDATED_SOURCE else ""
-        profile_cards += (
-            f'<div class="profile-card{active}"><h4>{esc(name)}</h4>'
-            f'<div class="meta">{esc(spec["risk_profile"])} · threshold {spec["threshold"]:.2f}<br>'
-            f"{esc(source)}</div>"
-            f'<div class="cats">Allows: {esc(cats)}</div></div>'
-        )
-    st.markdown(f'<div class="profile-grid">{profile_cards}</div>', unsafe_allow_html=True)
-    st.caption(
-        "Highlighted card: only Kids & Family at 0.55 is a validation candidate. "
-        "The other three thresholds are illustrative starting points."
-    )
-
-    pol_a, pol_b, pol_c = st.columns(3)
-    pol_a.markdown(
-        '<div class="metric-card"><h4>Kids &amp; Family · News approved before</h4>'
-        '<div class="value" style="color:#b91c1c;">6</div>'
-        '<div class="caption">unweighted model at this profile\'s threshold 0.55</div></div>',
-        unsafe_allow_html=True,
-    )
-    pol_b.markdown(
-        '<div class="metric-card"><h4>Kids &amp; Family · News approved after</h4>'
-        '<div class="value" style="color:#15803d;">0</div>'
-        '<div class="caption">balanced model + this profile\'s policy 0.55</div></div>',
-        unsafe_allow_html=True,
-    )
-    pol_c.markdown(
-        '<div class="metric-card"><h4>Cost for this profile</h4>'
-        '<div class="value" style="color:#b91c1c;">258</div>'
-        '<div class="caption">of 658 true Entertainment videos withheld</div></div>',
-        unsafe_allow_html=True,
-    )
-    st.caption(
-        "These three numbers belong to Kids & Family Brand only. "
-        "A Gaming Publisher (threshold 0.45, allows Gaming + Entertainment) makes the "
-        "opposite trade: more inventory, more context risk."
-    )
-
-    # ---------- 11. Data scarcity ----------
-    step_header(11, "Where the model runs out of data", "videos available per class")
-    scarcity = ""
-    largest = max(total for _, total, _ in CLASS_DISTRIBUTION)
-    for name, total, holdout in CLASS_DISTRIBUTION:
-        colour = "#b91c1c" if total < 600 else "#38bdf8"
-        scarcity += (
-            f'<div class="dist-row"><div class="nm">{esc(name)}</div>'
-            f'<div class="tr"><div class="fl" style="width:{total / largest * 100:.1f}%;'
-            f'background:{colour};"><span class="bar-top-label">{total:,}</span></div></div>'
-            f'<div class="pc">{holdout} in holdout</div></div>'
-        )
-    st.markdown(scarcity, unsafe_allow_html=True)
-    st.markdown(
-        '<div class="caveat">Gaming is judged on 20 holdout videos, so one mistake '
-        "moves its recall by five points. Rare vocabulary suffers too: phrases like "
-        "<i>summer league</i> never appear often enough to enter the 5,000-feature "
-        "vocabulary, so genuinely sporty titles can be scored on generic words alone.</div>",
-        unsafe_allow_html=True,
-    )
-
-    # ---------- 12. Verdict ----------
-    step_header(12, "Is the model actually useful?", "deployed model vs the dumb baseline")
-    final_a, final_b, final_c, final_d = st.columns(4)
-    final_a.markdown(
-        '<div class="metric-card"><h4>Macro-F1</h4>'
-        '<div class="value" style="color:#15803d;">0.759</div>'
-        '<div class="caption">baseline 0.114 · 6.7× better</div></div>',
-        unsafe_allow_html=True,
-    )
-    final_b.markdown(
-        '<div class="metric-card"><h4>News recall</h4>'
-        '<div class="value" style="color:#15803d;">88.0%</div>'
-        '<div class="caption">baseline 0.0%</div></div>',
-        unsafe_allow_html=True,
-    )
-    final_c.markdown(
-        '<div class="metric-card"><h4>Accuracy</h4>'
-        '<div class="value">78.8%</div>'
-        '<div class="caption">baseline 51.8%</div></div>',
-        unsafe_allow_html=True,
-    )
-    final_d.markdown(
-        '<div class="metric-card"><h4>Blocked-category approvals</h4>'
-        '<div class="value" style="color:#15803d;">0</div>'
-        '<div class="caption">Kids &amp; Family at threshold 0.55</div></div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<div class="takeaway"><b>Verdict:</b> the model is genuinely learning language, '
-        "not memorising the majority class. It multiplies macro-F1 by roughly six over the "
-        "baseline and turns a class the baseline never detected (News) into one it catches "
-        "almost nine times out of ten — which is the class the Kids & Family profile "
-        "has to block. Other advertiser profiles would treat that same News score differently. "
-        "That is enough to ship a <i>contextual suitability</i> MVP, not a safety product.</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<div class="caveat"><b>Read this before trusting the numbers — and what to build next.</b> '
-        "The 1,271 videos were reused to compare models, run error analysis and pick the 0.55 "
-        "threshold, so they are a development holdout, not a sealed test set. The labels are "
-        "YouTube's own categories and are sometimes wrong (opera and an Oprah speech are tagged "
-        "Sports). Trending data has no unsafe-content labels, so this measures contextual "
-        "suitability — never violence, hate or brand safety.<br><br>"
-        "<b>How this model can be improved:</b> (1) freeze the current pipeline and evaluate "
-        "once on an untouched test set; (2) collect more Gaming and Sports titles so rare "
-        "phrases like <i>summer league</i> enter the vocabulary; (3) audit and relabel noisy "
-        "YouTube categories before the next retrain; (4) validate the other three advertiser "
-        "thresholds on holdout counts, the same way 0.55 was chosen for Kids &amp; Family; "
-        "(5) only then add transcripts, thumbnails or a separate safety model — those are "
-        "new products, not patches on this one.</div>",
-        unsafe_allow_html=True,
-    )
+    render_story(evaluation, top_words_by_category(vec, model, top_n=6))

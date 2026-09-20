@@ -1,5 +1,67 @@
 # Decisions
 
+This file is a **historical record** of how the project evolved, plus a
+short current freeze. Interview answers should start from the current
+summary and `reports/evaluation.json`, not from older metric tables below.
+
+---
+
+## Current decision summary (portfolio freeze)
+
+**Problem.** Text-only multiclass category prediction on unique YouTube
+Trending videos, then an advertiser allow-list. Suitability, not safety.
+
+**Mapping.** Six advertiser-context groups in `src/config.py`. Pets &
+Animals stay in Lifestyle & Interests. A previous export mapped Pets into
+Education after looking at coefficients; that is rejected. The grouping
+is about placement context, not about raising macro-F1.
+
+**Split.** 80/20 stratified on the mapped label, `random_state=42`, unit
+`video_id`. This slice is a **development holdout** (comparison, errors,
+threshold talk, calibration). It is not a sealed test set.
+
+**Candidates compared on that same membership.** Majority baseline;
+unigram LR without weights; unigram LR with balanced weights;
+unigram-plus-bigram LR with balanced weights.
+
+**Selected model.** Unigram TF-IDF + logistic regression,
+`class_weight="balanced"`. Rule: minimize Kids & Family excluded-category
+approvals at 0.55; treat gaps of 3 or fewer videos as a tie; then maximize
+retention of allowed labels; then prefer the simpler spec.
+
+**Evidence (holdout n=1,271, from `reports/evaluation.json`).**
+Selected: accuracy 0.789, macro-F1 0.718, News recall 0.894.
+Kids & Family: News 0/104, all excluded 15/523 (Lifestyle 11, Gaming 4),
+retention 477/748. Balanced bigrams: 14/523 excluded and 467/748 retained.
+The one-video leak gap is inside the tie band; bigrams are not kept for
+sounding more advanced.
+
+**Policies.** Count every excluded category, not News alone. Kids 0.55 is a
+development-holdout candidate. Other advertiser thresholds are illustrative.
+Labels are YouTube proxies, not human suitability audits.
+
+**Calibration.** Kids `p_allow` ECE 0.163 on the development holdout. No
+calibrator fitted. `p_allow` is a score.
+
+**Robustness.** Frozen selected spec on a channel-disjoint split and a
+later-publish-time split. Channel-disjoint macro-F1 drops (0.621). These
+are stress tests, not a new random confirmation set.
+
+**App numbers.** Streamlit reads `reports/evaluation.json`. Empty or
+out-of-vocabulary text abstains (`Insufficient information`) instead of
+approving from the intercept. The user-facing figure is an allowed-category
+score, not a verified safety probability.
+
+**Next.** Freeze this pipeline and score an external file (later US scrape
+or another country). Do not reshuffle this CSV and call it a test set.
+
+---
+
+## Historical record
+
+The sections below are kept so the learning path stays visible. Metrics in
+D3/D4 used an earlier mapping and should not be quoted as current results.
+
 ## D1 — MVP problem definition (Phase 1)
 
 **Decision:** Text-only multiclass classifier for YouTube videos.
@@ -159,8 +221,26 @@ Brand YES/NO is policy, not a risk head.
 **Why:** "Safe" sounds like violence/unsafe scoring. This MVP never had that
 label. Suitability = does the predicted category match the brand allow-list.
 
-The public GitHub repo is `brandsuit-ai`. The older folder name `Brandsafe-ai`
-was only a local path.
+**Do not:** rename the folder `Brandsafe-ai` yet (paths/git). Keep
+`project_instructions.md` as the original brief.
 
-**Next:** Streamlit demo with Kids & Family at 0.55 (Infowars → NO). Do not
-overclaim brand safety.
+**Next experiment:** finish Streamlit (`THRESH_CEREAL` from D4) and demo
+Infowars → cereal NO.
+
+## D6 — Shared pipeline, honest policy counts, unigram selected (historical close)
+
+**Decision:** One config module; Pets remain Lifestyle; evaluate four specs
+on one development holdout; count every excluded category; select unigram
+balanced LR; call 0.55 a development candidate; document calibration and
+channel/temporal robustness.
+
+**Why this supersedes D4's "keep bigrams":** D4 optimized a News-only leak
+count and treated the holdout like a test set. Recomputed policy metrics
+show News 0/104 for both balanced models and 15 vs 14 excluded-category
+approvals. That is not a reason to keep n-grams.
+
+**Evidence:** `reports/evaluation.json` from `py -m src.evaluate`.
+
+**Do not:** quote D3/D4 tables as current results; remap Pets to Education
+to clean coefficients; describe a reshuffle of this CSV as a confirmation
+set.

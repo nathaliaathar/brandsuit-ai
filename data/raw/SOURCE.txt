@@ -1,7 +1,15 @@
 YouTube Trending — US files only
 
-Dataset: Kaggle datasnaek/youtube-new
-https://www.kaggle.com/datasets/datasnaek/youtube-new
+Original dataset:
+  Kaggle datasnaek/youtube-new
+  https://www.kaggle.com/datasets/datasnaek/youtube-new
 
-Put USvideos.csv in this folder (not committed). US_category_id.json is the
-category_id → name map and is committed.
+Downloaded from a public GitHub mirror of those same US files
+(Kaggle CLI was not configured on this machine):
+  https://github.com/ZhaoyiW/YouTube-Trending-Video-Analysis
+  raw file used in this workspace:
+  https://raw.githubusercontent.com/ZhaoyiW/YouTube-Trending-Video-Analysis/main/USvideos.csv
+  USvideos.csv (~60 MB, 40,949 rows)
+  US_category_id.json (category_id → name)
+
+Do not commit USvideos.csv. The JSON mapping is small and may be committed.
