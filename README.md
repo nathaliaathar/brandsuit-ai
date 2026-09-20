@@ -28,7 +28,7 @@ Place `USvideos.csv` at `data/raw/USvideos.csv` (gitignored, ~60 MB). `US_catego
 
 ## Reproduce
 
-From `bar-ilan-classes/Brandsafe-ai/`:
+From this repository root:
 
 ```text
 py -m pip install -r requirements.txt
@@ -125,7 +125,7 @@ Robustness with the **frozen selected spec** (not a confirmation set):
 ## Project layout
 
 ```text
-Brandsafe-ai/
+brandsuit-ai/
 ├── app.py                  # Streamlit: score text, then apply a policy
 ├── src/config.py           # mapping, split, four model specs, selection rule
 ├── src/dataset.py          # load, fingerprint, primary and robustness splits
