@@ -1,0 +1,19 @@
+# Dataset (too large for GitHub; download from Kaggle — see README)
+data/raw/*.csv
+
+# Trained models (rebuild with: python src/export_model.py)
+models/*.joblib
+models/*.pkl
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# Notebook / Streamlit junk
+.ipynb_checkpoints/
+.streamlit/
+_st.log
+_st.err

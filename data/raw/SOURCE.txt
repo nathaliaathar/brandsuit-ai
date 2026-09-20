@@ -1,0 +1,7 @@
+YouTube Trending — US files only
+
+Dataset: Kaggle datasnaek/youtube-new
+https://www.kaggle.com/datasets/datasnaek/youtube-new
+
+Put USvideos.csv in this folder (not committed). US_category_id.json is the
+category_id → name map and is committed.
