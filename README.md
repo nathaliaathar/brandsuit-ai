@@ -23,7 +23,7 @@ So I changed the product:
 | Violence / Sensitive as a class | Dropped — no labels |
 | One YES/NO from the model | Category model **plus** an advertiser policy |
 
-The original brief is in `project_instructions.md`. The decisions, including what I rejected, are in `DECISIONS.md`.
+What I chose and what I rejected is in `DECISIONS.md`.
 
 ---
 
@@ -102,7 +102,7 @@ Accuracy barely moved when I added `class_weight="balanced"`. Macro-F1 and News/
 
 The first model called 24 of 104 real News videos “Entertainment”. Six of those cleared `p_allow ≥ 0.55` (a retiring congressman, a submarine search, a soldier’s remains…). After bigrams + balanced weights + the 0.55 rule, those six fall below the line. Cost for Kids & Family: 258 of 658 true Entertainment videos also get withheld.
 
-The lab notebook is `notebooks/01_inspect_youtube_trending.ipynb` (Portuguese notes + English later sections). `error_analysis_examples.py` reprints those six titles.
+The lab notebook is `notebooks/01_inspect_youtube_trending.ipynb`. `error_analysis_examples.py` reprints those six titles.
 
 ---
 
@@ -116,8 +116,6 @@ brandsuit-ai/
 ├── notebooks/01_inspect_youtube_trending.ipynb
 ├── error_analysis_examples.py  # Holdout News leaks, before vs after
 ├── DECISIONS.md                # What I chose and what I rejected
-├── LEARNING_LOG.md             # Study notes (Portuguese)
-├── project_instructions.md     # Original brief
 ├── data/raw/                   # JSON mapping committed; CSV is not
 └── models/                     # .gitkeep only — run export_model.py
 ```

@@ -1,8 +1,5 @@
-"""Retrain the category classifier and write joblib files for Streamlit.
-
-The app must only transform + predict. Fitting inside Streamlit would mix
-training into serving. Run this script when the mapping or hyperparameters change.
-"""
+# Retrain the category classifier and write joblib files for Streamlit.
+# The app must only transform + predict. Run this when mapping or hyperparameters change.
 
 import json
 from pathlib import Path

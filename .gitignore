@@ -5,6 +5,10 @@ data/raw/*.csv
 models/*.joblib
 models/*.pkl
 
+# Local study notes — not part of the public repo
+LEARNING_LOG.md
+project_instructions.md
+
 # Python
 __pycache__/
 *.pyc

@@ -1,7 +1,5 @@
-"""Advertiser policies: allow-list + threshold.
-
-This is a business rule, not a second model. app.py only renders the decision.
-"""
+# Advertiser policies: allow-list + threshold.
+# This is a business rule, not a second model.
 
 BRAND_POLICIES = {
     "Kids & Family Brand": {
